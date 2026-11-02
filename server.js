@@ -54,9 +54,35 @@ app.get('/api/server-info', (req, res) => {
   });
 });
 
+// ── 헬스체크(self-ping 대상) ──
+app.get('/healthz', (req, res) => res.type('text').send('ok'));
+
 const server = app.listen(process.env.PORT || 3000, () => {
   console.log('Geo-Zebra on port ' + server.address().port);
 });
+
+// ── 잠들기 방지 self-ping ──
+// Render 무료 플랜은 15분간 외부 요청이 없으면 다운된다. localhost 호출은 외부 트래픽으로
+// 치지 않으므로 서버의 공개 URL(RENDER_EXTERNAL_URL)을 주기적으로 호출해 깨어 있게 한다.
+// RENDER_EXTERNAL_URL은 Render가 자동 주입하므로, 로컬 개발에서는 self-ping이 켜지지 않는다.
+// 주의: 항상 깨어 있으면 무료 인스턴스 시간(월 약 750시간)을 거의 다 쓴다.
+const SELF_URL = process.env.RENDER_EXTERNAL_URL || process.env.SELF_PING_URL;
+const KEEP_AWAKE = process.env.KEEP_AWAKE !== 'false'; // 끄려면 KEEP_AWAKE=false
+if (SELF_URL && KEEP_AWAKE) {
+  const pingUrl = SELF_URL.replace(/\/+$/, '') + '/healthz';
+  const PING_INTERVAL = 10 * 60 * 1000; // 10분 (15분 다운 전에 깨움)
+  setInterval(async () => {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 20000);
+      await fetch(pingUrl, { signal: ac.signal, headers: { 'User-Agent': 'geo-keepawake' } });
+      clearTimeout(t);
+    } catch (e) {
+      console.error('[keep-awake] ping failed:', e && e.message);
+    }
+  }, PING_INTERVAL).unref(); // unref: 이 타이머가 프로세스 종료를 막지 않게
+  console.log('[keep-awake] self-ping enabled →', pingUrl, '(10분 간격)');
+}
 
 // ── WebSocket 업그레이드 라우팅 ──
 // /wisp/  → 기존 Wisp 프록시 (YouTube, 치지직 등 스트리밍 가능)
